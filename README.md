@@ -24,4 +24,4 @@ To access and modify the [Swiftmailer message](http://swiftmailer.org/docs/messa
 
 ## Configuration
 
-Configuration is stored in `config/email.php`. The Swiftmailer transport can be manually configured by calling `Email::mailer($config)` before sending messages.
+Configuration is stored in `config/email.php`. Options are dependant upon transport method used. Consult the Swiftmailer documentation for options available to each transport.
