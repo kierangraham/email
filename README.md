@@ -1,39 +1,27 @@
-Email Module For Kohana 3.0
-=================================
+# Email Module For Kohana 3.x
 
-This is a direct port of the email helper from Kohana 2.3.3 source code.
+Factory-based email class. This class is a simple wrapper around [Swiftmailer](http://github.com/swiftmailer/swiftmailer).
 
-It has been updated to work with SwiftMailer 4 and includes the libs dir from the 4.0.4 distribution.
+## Usage
 
-Usage should be exactly as with old helper.
+Create new messages using the `Email::factory($subject, $message)` method. Add recipients, add sender, send message:
 
-Methods defined:
+    $email = Email::factory('Hello, World', 'This is my body, it is nice.')
+        ->to('person@example.com')
+        ->from('you@example.com', 'My Name')
+        ->send()
+        ;
 
-### Email::connect($config = NULL)
+You can also add HTML to your message:
 
-Creates SwiftMailer object. $config is an array of configuration values and defaults to using the config file 'email'.
+    $email->message('<p>This is <em>my</em> body, it is <strong>nice</strong>.</p>', 'text/html');
 
-Note: PopBeforeSmtp is not supported in this release as I didn't know what was required to set it up.
-It IS supported in Swiftmailer through the Swift_Plugins_PopBeforeSmtpPlugin plugin class. This can be used manually if required.
-If anyone can modify and test the connect() methd with this functionality I'll add it but I can't find documentation about how it used to work (i.e. is expected to work) so I have left it out for now.
+Additional recipients can be added using the `to()`, `cc()`, and `bcc()` methods.
 
-### Email::send($to, $from, $subject, $message, $html = false)
+Additional senders can be added using the `from()` and `reply_to()` methods. If multiple sender addresses are specified, you need to set the actual sender of the message using the `sender()` method. Set the bounce recipient by using the `return_path()` method.
 
-$to can be any of the following:
+To access and modify the [Swiftmailer message](http://swiftmailer.org/docs/messages) directly, use the `raw_message()` method.
 
-*  a single string email address e.g. "test@example.com"
-*  an array specifying an email address and a name e.g. array('test@example.com', 'John Doe')
-*  an array of recipients in either above format, keyed by type e.g. array('to' => 'test@example.com', 'cc' => array('test2@example.com', 'Jane Doe'), 'bcc' => 'another@example.com')
+## Configuration
 
-$from can be either a string email or array of email and name as above
-
-More complex email (multipart, attachments, batch mailing etc.) must be done using the native Swift_Mailer classes. The Swift Mailer autoloader is included by connect() so you can use and class in the Swift library without worrying about including files.
-
-The Swift_Mailer object setup by connect is returned by it so if you need to access it manually use:
-
-        $mailer = Email::connect();
-
-        // Create complex Swift_Message object stored in $message
-
-        $mailer->send($message);
-
+Configuration is stored in `config/email.php`. The Swiftmailer transport can be manually configured by calling `Email::mailer($config)` before sending messages.
