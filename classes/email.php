@@ -1,145 +1,302 @@
 <?php defined('SYSPATH') OR die('No direct access allowed.');
 /**
- * Email module
+ * Email message building and sending.
  *
- * Ported from Kohana 2.2.3 Core to Kohana 3.0 module
- * 
- * Updated to use Swiftmailer 4.0.4
- *
- * @package    Core
+ * @package    Kohana
+ * @category   Email
  * @author     Kohana Team
- * @copyright  (c) 2007-2008 Kohana Team
+ * @copyright  (c) 2007-2011 Kohana Team
  * @license    http://kohanaphp.com/license.html
  */
 class Email {
 
-	// SwiftMailer instance
-	protected static $mail;
+	/**
+	 * @var  object  Swiftmailer instance
+	 */
+	protected static $_mailer;
 
 	/**
 	 * Creates a SwiftMailer instance.
 	 *
-	 * @param   string  DSN connection string
 	 * @return  object  Swift object
 	 */
-	public static function connect($config = NULL)
+	public static function mailer()
 	{
-		if ( ! class_exists('Swift_Mailer', FALSE))
+		if ( ! Email::$_mailer)
 		{
-			// Load SwiftMailer
-			require Kohana::find_file('vendor', 'swift/swift_required');
-		}
+			// Load email configuration, make sure minimum defaults are set
+			$config = Kohana::config('email')->as_array() + array(
+				'driver'  => 'native',
+				'options' => array(),
+			);
 
-		// Load default configuration
-		($config === NULL) and $config = Kohana::config('email');
-		
-		switch ($config['driver'])
-		{
-			case 'smtp':
-				// Set port
-				$port = empty($config['options']['port']) ? 25 : (int) $config['options']['port'];
-				
-				// Create SMTP Transport
-				$transport = Swift_SmtpTransport::newInstance($config['options']['hostname'], $port);
+			// Extract configured options
+			extract($config, EXTR_SKIP);
 
-				if ( ! empty($config['options']['encryption']))
+			if ($driver === 'smtp')
+			{
+				// Create SMTP transport
+				$transport = Swift_SmtpTransport::newInstance($options['hostname']);
+
+				if (isset($options['port']))
+				{
+					// Set custom port number
+					$transport->setPort($options['port']);
+				}
+
+				if (isset($options['encryption']))
 				{
 					// Set encryption
-					$transport->setEncryption($config['options']['encryption']);
+					$transport->setEncryption($options['encryption']);
 				}
-				
-				// Do authentication, if part of the DSN
-				empty($config['options']['username']) or $transport->setUsername($config['options']['username']);
-				empty($config['options']['password']) or $transport->setPassword($config['options']['password']);
 
-				// Set the timeout to 5 seconds
-				$transport->setTimeout(empty($config['options']['timeout']) ? 5 : (int) $config['options']['timeout']);
-			break;
-			case 'sendmail':
-				// Create a sendmail connection
-				$transport = Swift_SendmailTransport::newInstance(empty($config['options']) ? "/usr/sbin/sendmail -bs" : $config['options']);
+				if (isset($options['username']))
+				{
+					// Require authentication, username
+					$transport->setUsername($options['username']);
+				}
 
-			break;
-			default:
-				// Use the native connection
-				$transport = Swift_MailTransport::newInstance($config['options']);
-			break;
+				if (isset($options['password']))
+				{
+					// Require authentication, password
+					$transport->setPassword($options['password']);
+				}
+
+				if (isset($options['timeout']))
+				{
+					// Use custom timeout setting
+					$transport->setTimeout($options['timeout']);
+				}
+			}
+			elseif ($driver === 'sendmail')
+			{
+				// Create sendmail transport
+				$transport = Swift_SendmailTransport::newInstance();
+
+				if (isset($options['command']))
+				{
+					// Use custom sendmail command
+					$transport->setCommand($options['command']);
+				}
+			}
+			else
+			{
+				// Create native transport
+				$transport = Swift_MailTransport::newInstance();
+
+				if (isset($options['params']))
+				{
+					// Set extra parameters for mail()
+					$transport->setExtraParams($options['params']);
+				}
+			}
+
+			// Create the SwiftMailer instance
+			Email::$_mailer = Swift_Mailer::newInstance($transport);
 		}
 
-		// Create the SwiftMailer instance
-		return Email::$mail = Swift_Mailer::newInstance($transport);
+		return Email::$_mailer;
 	}
 
 	/**
-	 * Send an email message.
+	 * Create a new email message.
 	 *
-	 * @param   string|array  recipient email (and name), or an array of To, Cc, Bcc names
-	 * @param   string|array  sender email (and name)
-	 * @param   string        message subject
-	 * @param   string        message body
-	 * @param   boolean       send email as HTML
-	 * @return  integer       number of emails sent
+	 * @param   string  message subject
+	 * @param   string  message body
+	 * @param   string  body mime type
+	 * @return  Email
 	 */
-	public static function send($to, $from, $subject, $message, $html = FALSE)
+	public static function factory($subject = NULL, $message = NULL, $type = NULL)
 	{
-		// Connect to SwiftMailer
-		(Email::$mail === NULL) and email::connect();
+		return new Email($subject, $message, $type);
+	}
 
-		// Determine the message type
-		$html = ($html === TRUE) ? 'text/html' : 'text/plain';
+	/**
+	 * @var  object  message instance
+	 */
+	protected $_message;
 
-		// Create the message
-		$message = Swift_Message::newInstance($subject, $message, $html, 'utf-8');
+	/**
+	 * Initialize a new Swift_Message, set the subject and body.
+	 *
+	 * @param   string  message subject
+	 * @param   string  message body
+	 * @param   string  body mime type
+	 * @return  void
+	 */
+	public function __construct($subject = NULL, $message = NULL, $type = NULL)
+	{
+		// Create a new message, match internal character set
+		$this->_message = Swift_Message::newInstance()
+			->setCharset(Kohana::$charset)
+			;
 
-		if (is_string($to))
+		if ($subject)
 		{
-			// Single recipient
-			$message->setTo($to);
-		}
-		elseif (is_array($to))
-		{
-			if (isset($to[0]) AND isset($to[1]))
-			{
-				// Create To: address set
-				$to = array('to' => $to);
-			}
-
-			foreach ($to as $method => $set)
-			{
-				if ( ! in_array($method, array('to', 'cc', 'bcc')))
-				{
-					// Use To: by default
-					$method = 'to';
-				}
-
-				// Create method name
-				$method = 'add'.ucfirst($method);
-
-				if (is_array($set))
-				{
-					// Add a recipient with name
-					$message->$method($set[0], $set[1]);
-				}
-				else
-				{
-					// Add a recipient without name
-					$message->$method($set);
-				}
-			}
+			// Apply subject
+			$this->subject($subject);
 		}
 
-		if (is_string($from))
+		if ($message)
 		{
-			// From without a name
-			$message->setFrom($from);
+			// Apply message, with type
+			$this->message($message, $type);
 		}
-		elseif (is_array($from))
+	}
+
+	/**
+	 * Set the message subject.
+	 *
+	 * @param   string  new subject
+	 * @return  Email
+	 */
+	public function subject($subject)
+	{
+		// Change the subject
+		$this->_message->setSubject($subject);
+
+		return $this;
+	}
+
+	/**
+	 * Set the message body. Multiple bodies with different types can be added
+	 * by calling this method multiple times. Every email is required to have
+	 * a "text/plain" message body.
+	 *
+	 * @param   string  new message body
+	 * @param   string  mime type: text/html, etc
+	 * @return  Email
+	 */
+	public function message($body, $type = NULL)
+	{
+		if ( ! $type OR $type === 'text/plain')
 		{
-			// From with a name
-			$message->setFrom($from[0], $from[1]);
+			// Set the main text/plain body
+			$this->_message->setBody($body);
+		}
+		else
+		{
+			// Add a custom mime type
+			$this->_message->addPart($body, $type);
 		}
 
-		return Email::$mail->send($message);
+		return $this;
+	}
+
+	/**
+	 * Add email recipients.
+	 *
+	 * @param   string   email address
+	 * @param   string   full name
+	 * @param   string   recipient type: to, cc, bcc
+	 * @return  Email
+	 */
+	public function to($email, $name = NULL, $type = 'to')
+	{
+		// Call $this->_message->{add$Type}($email, $name)
+		call_user_func(array($this->_message, 'add'.ucfirst($type)), $email, $name);
+
+		return $this;
+	}
+
+	/**
+	 * Add a "carbon copy" email recipient.
+	 *
+	 * @param   string   email address
+	 * @param   string   full name
+	 * @return  Email
+	 */
+	public function cc($email, $name = NULL)
+	{
+		return $this->to($email, $name, 'cc');
+	}
+
+	/**
+	 * Add a "blind carbon copy" email recipient.
+	 *
+	 * @param   string   email address
+	 * @param   string   full name
+	 * @return  Email
+	 */
+	public function bcc($email, $name = NULL)
+	{
+		return $this->to($email, $name, 'bcc');
+	}
+
+	/**
+	 * Add email senders.
+	 *
+	 * @param   string   email address
+	 * @param   string   full name
+	 * @param   string   sender type: from, replyto
+	 * @return  Email
+	 */
+	public function from($email, $name = NULL, $type = 'from')
+	{
+		// Call $this->_message->{add$Type}($email, $name)
+		call_user_func(array($this->_message, 'add'.ucfirst($type)), $email, $name);
+
+		return $this;
+	}
+
+	/**
+	 * Add "reply to" email sender.
+	 *
+	 * @param   string   email address
+	 * @param   string   full name
+	 * @return  Email
+	 */
+	public function reply_to($email, $name = NULL)
+	{
+		return $this->from($email, $name, 'replyto');
+	}
+
+	/**
+	 * Add actual email sender.
+	 *
+	 * [!!] This must be set when defining multiple "from" addresses!
+	 *
+	 * @param   string   email address
+	 * @param   string   full name
+	 * @return  Email
+	 */
+	public function sender($email, $name = NULL)
+	{
+		$this->_message->setSender($email, $name);
+	}
+
+	/**
+	 * Set the return path for bounce messages.
+	 *
+	 * @param   string  email address
+	 * @return  Email
+	 */
+	public function return_path($email)
+	{
+		$this->_message->setReplyPath($email);
+
+		return $this;
+	}
+
+	/**
+	 * Access the raw [Swiftmailer message](http://swiftmailer.org/docs/messages).
+	 *
+	 * @return  Swift_Message
+	 */
+	public function raw_message()
+	{
+		return $this->_message;
+	}
+
+	/**
+	 * Send the email. Failed recipients can be collected by passing an array.
+	 *
+	 * @param   array   failed recipient list, by reference
+	 * @return  boolean
+	 */
+	public function send(array & $failed = NULL)
+	{
+		return Email::mailer()->send($this->_message, $failed);
 	}
 
 } // End email
